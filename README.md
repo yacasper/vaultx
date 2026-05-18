@@ -31,7 +31,7 @@
 
 ## 📦 Install
 
-### Homebrew (macOS / Linux — recommended)
+### 🍺 Homebrew (macOS / Linux — recommended)
 
 ```bash
 brew tap yacasper/tap
