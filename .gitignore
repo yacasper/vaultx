@@ -1,0 +1,7 @@
+vaultx
+vaultx-gui
+*.vx
+*.app
+.DS_Store
+.claude/
+.idea
