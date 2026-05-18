@@ -86,19 +86,22 @@ func printProgress(done, total int64) {
 }
 
 type progressReader struct {
-	r     io.Reader
-	read  int64
-	total int64
+	r       io.Reader
+	read    int64
+	total   int64
+	enabled bool
 }
 
 func (p *progressReader) Read(buf []byte) (int, error) {
 	n, err := p.r.Read(buf)
 	p.read += int64(n)
-	printProgress(p.read, p.total)
+	if p.enabled {
+		printProgress(p.read, p.total)
+	}
 	return n, err
 }
 
-func newProgressReader(r io.Reader, src string) (*progressReader, bool) {
+func newProgressReader(r io.Reader, src string, enabled bool) (*progressReader, bool) {
 	if !term.IsTerminal(int(os.Stderr.Fd())) || src == "-" {
 		return nil, false
 	}
@@ -106,7 +109,7 @@ func newProgressReader(r io.Reader, src string) (*progressReader, bool) {
 	if err != nil || info.Size() < progressMinSize {
 		return nil, false
 	}
-	return &progressReader{r: r, total: info.Size()}, true
+	return &progressReader{r: r, total: info.Size(), enabled: enabled}, true
 }
 
 // ── key derivation ────────────────────────────────────────────────────────────
@@ -381,7 +384,7 @@ func encryptFileAs(src, dst, password string, algo byte, shred, armor bool, cont
 	defer r.Close()
 
 	var reader io.Reader = r
-	pr, hasProgress := newProgressReader(r, src)
+	pr, hasProgress := newProgressReader(r, src, true)
 	if hasProgress {
 		reader = pr
 	}
@@ -491,9 +494,16 @@ func decryptFile(src, dst, password string, armor bool, onKeyReady func()) error
 	}
 	combined := io.MultiReader(bytes.NewReader(peek), raw)
 
-	pr, hasProgress := newProgressReader(r, src)
+	pr, hasProgress := newProgressReader(r, src, false)
 	if hasProgress {
 		combined = io.MultiReader(bytes.NewReader(peek), pr)
+		origOnKeyReady := onKeyReady
+		onKeyReady = func() {
+			if origOnKeyReady != nil {
+				origOnKeyReady()
+			}
+			pr.enabled = true
+		}
 	}
 
 	var decErr error
@@ -907,7 +917,7 @@ func cmdVerify(args []string) {
 	}
 	combined := io.MultiReader(bytes.NewReader(peek), raw)
 
-	pr, hasProgress := newProgressReader(f, src)
+	pr, hasProgress := newProgressReader(f, src, false)
 	if hasProgress {
 		combined = io.MultiReader(bytes.NewReader(peek), pr)
 	}
@@ -915,7 +925,13 @@ func cmdVerify(args []string) {
 	switch string(peek) {
 	case string(magicV2):
 		fmt.Fprint(os.Stderr, "    Deriving key… ")
-		m, err := parseV2Header(combined, pw, func() { fmt.Fprintln(os.Stderr, "done.") })
+		verifyOnKeyReady := func() {
+			fmt.Fprintln(os.Stderr, "done.")
+			if hasProgress {
+				pr.enabled = true
+			}
+		}
+		m, err := parseV2Header(combined, pw, verifyOnKeyReady)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n❌  %v\n", err)
 			os.Exit(1)
