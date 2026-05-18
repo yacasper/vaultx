@@ -41,7 +41,7 @@ brew install vaultx
 Update to the latest version:
 
 ```bash
-brew upgrade vaultx
+brew update && brew upgrade vaultx
 ```
 
 ### Download binary (no Go required)
