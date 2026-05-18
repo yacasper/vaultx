@@ -34,14 +34,14 @@ func TestDeriveKey_DifferentSalts(t *testing.T) {
 func streamRoundtrip(t *testing.T, algo byte, plaintext []byte, password string) {
 	t.Helper()
 	var enc bytes.Buffer
-	if err := encryptStream(bytes.NewReader(plaintext), &enc, password, algo, typeFile); err != nil {
+	if err := encryptStream(bytes.NewReader(plaintext), &enc, password, algo, typeFile, nil); err != nil {
 		t.Fatalf("encryptStream: %v", err)
 	}
 
 	combined := io.MultiReader(bytes.NewReader(enc.Bytes()[:len(magicV2)]), bytes.NewReader(enc.Bytes()[len(magicV2):]))
 	// Simpler: parse from full buffer
 	r := bytes.NewReader(enc.Bytes())
-	m, err := parseV2Header(r, password)
+	m, err := parseV2Header(r, password, nil)
 	if err != nil {
 		t.Fatalf("parseV2Header: %v", err)
 	}
@@ -77,10 +77,10 @@ func TestStreamRoundtrip_Empty(t *testing.T) {
 
 func TestStream_WrongPassword(t *testing.T) {
 	var enc bytes.Buffer
-	encryptStream(bytes.NewReader([]byte("secret")), &enc, "correct", algoAES, typeFile)
+	encryptStream(bytes.NewReader([]byte("secret")), &enc, "correct", algoAES, typeFile, nil)
 
 	r := bytes.NewReader(enc.Bytes())
-	m, err := parseV2Header(r, "wrong")
+	m, err := parseV2Header(r, "wrong", nil)
 	if err != nil {
 		t.Fatal("header should parse even with wrong password (key derived, not yet verified)")
 	}
@@ -91,13 +91,13 @@ func TestStream_WrongPassword(t *testing.T) {
 
 func TestStream_TamperedChunk(t *testing.T) {
 	var enc bytes.Buffer
-	encryptStream(bytes.NewReader([]byte("secret")), &enc, "pass", algoAES, typeFile)
+	encryptStream(bytes.NewReader([]byte("secret")), &enc, "pass", algoAES, typeFile, nil)
 
 	b := enc.Bytes()
 	b[len(b)-1] ^= 0xFF // flip last byte of ciphertext
 
 	r := bytes.NewReader(b)
-	m, _ := parseV2Header(r, "pass")
+	m, _ := parseV2Header(r, "pass", nil)
 	if err := decryptChunks(r, io.Discard, m); err == nil {
 		t.Fatal("expected error on tampered ciphertext")
 	}
@@ -106,15 +106,15 @@ func TestStream_TamperedChunk(t *testing.T) {
 func TestStream_UniquePerEncryption(t *testing.T) {
 	plain := []byte("same")
 	var e1, e2 bytes.Buffer
-	encryptStream(bytes.NewReader(plain), &e1, "pass", algoAES, typeFile)
-	encryptStream(bytes.NewReader(plain), &e2, "pass", algoAES, typeFile)
+	encryptStream(bytes.NewReader(plain), &e1, "pass", algoAES, typeFile, nil)
+	encryptStream(bytes.NewReader(plain), &e2, "pass", algoAES, typeFile, nil)
 	if bytes.Equal(e1.Bytes(), e2.Bytes()) {
 		t.Fatal("two encryptions must differ")
 	}
 }
 
 func TestStream_UnknownAlgo(t *testing.T) {
-	if err := encryptStream(bytes.NewReader([]byte("x")), io.Discard, "p", 0xFF, typeFile); err == nil {
+	if err := encryptStream(bytes.NewReader([]byte("x")), io.Discard, "p", 0xFF, typeFile, nil); err == nil {
 		t.Fatal("expected error for unknown algo")
 	}
 }
@@ -123,10 +123,10 @@ func TestStream_UnknownAlgo(t *testing.T) {
 
 func TestVerify_OK(t *testing.T) {
 	var enc bytes.Buffer
-	encryptStream(bytes.NewReader([]byte("verify me")), &enc, "pass", algoAES, typeFile)
+	encryptStream(bytes.NewReader([]byte("verify me")), &enc, "pass", algoAES, typeFile, nil)
 
 	r := bytes.NewReader(enc.Bytes())
-	m, err := parseV2Header(r, "pass")
+	m, err := parseV2Header(r, "pass", nil)
 	if err != nil {
 		t.Fatalf("parseV2Header: %v", err)
 	}
@@ -144,10 +144,10 @@ func TestEncryptFile_Roundtrip(t *testing.T) {
 	dec := filepath.Join(dir, "plain.txt.out")
 
 	os.WriteFile(src, []byte("file content"), 0600)
-	if err := encryptFile(src, enc, "pass", algoAES, false, false); err != nil {
+	if err := encryptFile(src, enc, "pass", algoAES, false, false, nil); err != nil {
 		t.Fatalf("encryptFile: %v", err)
 	}
-	if err := decryptFile(enc, dec, "pass", false); err != nil {
+	if err := decryptFile(enc, dec, "pass", false, nil); err != nil {
 		t.Fatalf("decryptFile: %v", err)
 	}
 	got, _ := os.ReadFile(dec)
@@ -162,7 +162,7 @@ func TestEncryptFile_Shred(t *testing.T) {
 	enc := filepath.Join(dir, "secret.vx")
 
 	os.WriteFile(src, []byte("shred me"), 0600)
-	if err := encryptFile(src, enc, "pass", algoAES, true, false); err != nil {
+	if err := encryptFile(src, enc, "pass", algoAES, true, false, nil); err != nil {
 		t.Fatalf("encryptFile shred: %v", err)
 	}
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
@@ -177,7 +177,7 @@ func TestEncryptFile_Armor(t *testing.T) {
 	dec := filepath.Join(dir, "msg.out")
 
 	os.WriteFile(src, []byte("armored"), 0600)
-	if err := encryptFile(src, enc, "pass", algoAES, false, true); err != nil {
+	if err := encryptFile(src, enc, "pass", algoAES, false, true, nil); err != nil {
 		t.Fatalf("encryptFile armor: %v", err)
 	}
 	raw, _ := os.ReadFile(enc)
@@ -186,7 +186,7 @@ func TestEncryptFile_Armor(t *testing.T) {
 			t.Fatal("armored output must be ASCII-only")
 		}
 	}
-	if err := decryptFile(enc, dec, "pass", true); err != nil {
+	if err := decryptFile(enc, dec, "pass", true, nil); err != nil {
 		t.Fatalf("decryptFile armor: %v", err)
 	}
 	got, _ := os.ReadFile(dec)
@@ -202,8 +202,8 @@ func TestDecryptFile_WrongPassword(t *testing.T) {
 	dec := filepath.Join(dir, "f.out")
 
 	os.WriteFile(src, []byte("secret"), 0600)
-	encryptFile(src, enc, "correct", algoAES, false, false)
-	if err := decryptFile(enc, dec, "wrong", false); err == nil {
+	encryptFile(src, enc, "correct", algoAES, false, false, nil)
+	if err := decryptFile(enc, dec, "wrong", false, nil); err == nil {
 		t.Fatal("expected error on wrong password")
 	}
 }
@@ -220,10 +220,10 @@ func TestStdinStdout_Roundtrip(t *testing.T) {
 
 	os.WriteFile(srcFile, []byte("pipe content"), 0600)
 
-	if err := encryptFile(srcFile, encFile, "pipe", algoAES, false, false); err != nil {
+	if err := encryptFile(srcFile, encFile, "pipe", algoAES, false, false, nil); err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if err := decryptFile(encFile, decFile, "pipe", false); err != nil {
+	if err := decryptFile(encFile, decFile, "pipe", false, nil); err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
 	got, _ := os.ReadFile(decFile)
@@ -244,10 +244,10 @@ func TestEncryptDirectory_Roundtrip(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "a.txt"), []byte("alpha"), 0600)
 	os.WriteFile(filepath.Join(src, "sub", "b.txt"), []byte("beta"), 0600)
 
-	if err := encryptDirectory(src, out, "dirpass", algoAES, false, false); err != nil {
+	if err := encryptDirectory(src, out, "dirpass", algoAES, false, false, nil); err != nil {
 		t.Fatalf("encryptDirectory: %v", err)
 	}
-	if err := decryptFile(out, restored, "dirpass", false); err != nil {
+	if err := decryptFile(out, restored, "dirpass", false, nil); err != nil {
 		t.Fatalf("decryptFile dir: %v", err)
 	}
 
@@ -280,7 +280,7 @@ func TestBackwardCompat_V1File(t *testing.T) {
 	}
 	os.WriteFile(enc, raw, 0600)
 
-	if err = decryptFile(enc, dec, "pass", false); err != nil {
+	if err = decryptFile(enc, dec, "pass", false, nil); err != nil {
 		t.Fatalf("decryptFile V1: %v", err)
 	}
 	got, _ := os.ReadFile(dec)

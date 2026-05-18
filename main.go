@@ -23,12 +23,14 @@ import (
 var version = "dev"
 
 const (
-	saltLen   = 32
-	nonceLen  = 12
-	argonTime = 3
-	argonMem  = 64 * 1024
-	argonPara = 4
-	chunkSize = 64 * 1024
+	saltLen         = 32
+	nonceLen        = 12
+	argonTime       = 3
+	argonMem        = 64 * 1024
+	argonPara       = 4
+	chunkSize       = 64 * 1024
+	minPasswordLen  = 6
+	progressMinSize = 1 * 1024 * 1024 // show progress bar for files ≥ 1 MB
 )
 
 // V1 — legacy in-memory format (read only, kept for backward compat)
@@ -50,6 +52,62 @@ const (
 	chunkMore = byte(0x00)
 	chunkLast = byte(0xFF)
 )
+
+// ── progress ──────────────────────────────────────────────────────────────────
+
+func formatBytes(n int64) string {
+	const (
+		KB = int64(1024)
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case n >= GB:
+		return fmt.Sprintf("%.1f GB", float64(n)/float64(GB))
+	case n >= MB:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(MB))
+	case n >= KB:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func printProgress(done, total int64) {
+	const w = 20
+	pct := float64(done) / float64(total)
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct * w)
+	fmt.Fprintf(os.Stderr, "\r    Progress  : [%s%s] %3.0f%%  %s / %s",
+		strings.Repeat("█", filled), strings.Repeat("░", w-filled),
+		pct*100, formatBytes(done), formatBytes(total))
+}
+
+type progressReader struct {
+	r     io.Reader
+	read  int64
+	total int64
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	p.read += int64(n)
+	printProgress(p.read, p.total)
+	return n, err
+}
+
+func newProgressReader(r io.Reader, src string) (*progressReader, bool) {
+	if !term.IsTerminal(int(os.Stderr.Fd())) || src == "-" {
+		return nil, false
+	}
+	info, err := os.Stat(src)
+	if err != nil || info.Size() < progressMinSize {
+		return nil, false
+	}
+	return &progressReader{r: r, total: info.Size()}, true
+}
 
 // ── key derivation ────────────────────────────────────────────────────────────
 
@@ -101,10 +159,14 @@ func chunkAAD(idx uint64, flag byte) []byte {
 
 // ── V2 streaming encrypt ──────────────────────────────────────────────────────
 
-func encryptStream(r io.Reader, w io.Writer, password string, algo, contentType byte) error {
+func encryptStream(r io.Reader, w io.Writer, password string, algo, contentType byte, onKeyReady func()) error {
 	salt := randomBytes(saltLen)
 	baseNonce := randomBytes(nonceLen)
 	key := deriveKey(password, salt)
+
+	if onKeyReady != nil {
+		onKeyReady()
+	}
 
 	aead, err := newAEAD(algo, key)
 	if err != nil {
@@ -164,7 +226,7 @@ type streamMeta struct {
 	baseNonce   []byte
 }
 
-func parseV2Header(r io.Reader, password string) (*streamMeta, error) {
+func parseV2Header(r io.Reader, password string, onKeyReady func()) (*streamMeta, error) {
 	headerLen := len(magicV2) + 1 + 1 + saltLen + nonceLen
 	header := make([]byte, headerLen)
 	if _, err := io.ReadFull(r, header); err != nil {
@@ -185,6 +247,11 @@ func parseV2Header(r io.Reader, password string) (*streamMeta, error) {
 	copy(baseNonce, header[off:])
 
 	key := deriveKey(password, salt)
+
+	if onKeyReady != nil {
+		onKeyReady()
+	}
+
 	aead, err := newAEAD(algo, key)
 	if err != nil {
 		return nil, err
@@ -302,16 +369,22 @@ func openOutput(path string) (io.WriteCloser, error) {
 
 // ── encrypt file / directory ──────────────────────────────────────────────────
 
-func encryptFile(src, dst, password string, algo byte, shred, armor bool) error {
-	return encryptFileAs(src, dst, password, algo, shred, armor, typeFile)
+func encryptFile(src, dst, password string, algo byte, shred, armor bool, onKeyReady func()) error {
+	return encryptFileAs(src, dst, password, algo, shred, armor, typeFile, onKeyReady)
 }
 
-func encryptFileAs(src, dst, password string, algo byte, shred, armor bool, contentType byte) error {
+func encryptFileAs(src, dst, password string, algo byte, shred, armor bool, contentType byte, onKeyReady func()) error {
 	r, err := openInput(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
+
+	var reader io.Reader = r
+	pr, hasProgress := newProgressReader(r, src)
+	if hasProgress {
+		reader = pr
+	}
 
 	w, err := openOutput(dst)
 	if err != nil {
@@ -320,12 +393,16 @@ func encryptFileAs(src, dst, password string, algo byte, shred, armor bool, cont
 
 	if armor {
 		enc := base64.NewEncoder(base64.StdEncoding, w)
-		err = encryptStream(r, enc, password, algo, contentType)
+		err = encryptStream(reader, enc, password, algo, contentType, onKeyReady)
 		enc.Close()
 	} else {
-		err = encryptStream(r, w, password, algo, contentType)
+		err = encryptStream(reader, w, password, algo, contentType, onKeyReady)
 	}
 	w.Close()
+
+	if hasProgress {
+		fmt.Fprintln(os.Stderr)
+	}
 
 	if err != nil {
 		if dst != "-" {
@@ -340,7 +417,7 @@ func encryptFileAs(src, dst, password string, algo byte, shred, armor bool, cont
 	return nil
 }
 
-func encryptDirectory(src, dst, password string, algo byte, shred, armor bool) error {
+func encryptDirectory(src, dst, password string, algo byte, shred, armor bool, onKeyReady func()) error {
 	tmp, err := os.CreateTemp("", "vaultx-*.zip")
 	if err != nil {
 		return err
@@ -375,7 +452,7 @@ func encryptDirectory(src, dst, password string, algo byte, shred, armor bool) e
 		return err
 	}
 
-	if err = encryptFileAs(tmpPath, dst, password, algo, false, armor, typeDir); err != nil {
+	if err = encryptFileAs(tmpPath, dst, password, algo, false, armor, typeDir, onKeyReady); err != nil {
 		return err
 	}
 
@@ -396,7 +473,7 @@ func encryptDirectory(src, dst, password string, algo byte, shred, armor bool) e
 
 // ── decrypt file ──────────────────────────────────────────────────────────────
 
-func decryptFile(src, dst, password string, armor bool) error {
+func decryptFile(src, dst, password string, armor bool, onKeyReady func()) error {
 	r, err := openInput(src)
 	if err != nil {
 		return err
@@ -414,17 +491,32 @@ func decryptFile(src, dst, password string, armor bool) error {
 	}
 	combined := io.MultiReader(bytes.NewReader(peek), raw)
 
+	pr, hasProgress := newProgressReader(r, src)
+	if hasProgress {
+		combined = io.MultiReader(bytes.NewReader(peek), pr)
+	}
+
+	var decErr error
 	switch string(peek) {
 	case string(magicV2):
-		return decryptFileV2(combined, dst, password)
+		decErr = decryptFileV2(combined, dst, password, onKeyReady)
 	case string(magicV1):
-		return decryptFileV1(combined, dst, password)
+		if onKeyReady != nil {
+			onKeyReady()
+		}
+		decErr = decryptFileV1(combined, dst, password)
+	default:
+		return fmt.Errorf("not a vaultx file or corrupted header")
 	}
-	return fmt.Errorf("not a vaultx file or corrupted header")
+
+	if hasProgress {
+		fmt.Fprintln(os.Stderr)
+	}
+	return decErr
 }
 
-func decryptFileV2(r io.Reader, dst, password string) error {
-	m, err := parseV2Header(r, password)
+func decryptFileV2(r io.Reader, dst, password string, onKeyReady func()) error {
+	m, err := parseV2Header(r, password, onKeyReady)
 	if err != nil {
 		return err
 	}
@@ -564,6 +656,9 @@ func promptPassword(confirm bool) (string, error) {
 	if len(pw) == 0 {
 		return "", fmt.Errorf("password cannot be empty")
 	}
+	if len(pw) < minPasswordLen {
+		return "", fmt.Errorf("password must be at least %d characters", minPasswordLen)
+	}
 	if confirm {
 		fmt.Fprint(os.Stderr, "🔑  Confirm password: ")
 		pw2, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -576,6 +671,16 @@ func promptPassword(confirm bool) (string, error) {
 		}
 	}
 	return string(pw), nil
+}
+
+func validatePassword(pw string) error {
+	if len(pw) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+	if len(pw) < minPasswordLen {
+		return fmt.Errorf("password must be at least %d characters", minPasswordLen)
+	}
+	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -654,6 +759,9 @@ func cmdEncrypt(args []string) {
 			fmt.Fprintf(os.Stderr, "❌  %v\n", err)
 			os.Exit(1)
 		}
+	} else if err = validatePassword(pw); err != nil {
+		fmt.Fprintf(os.Stderr, "❌  %v\n", err)
+		os.Exit(1)
 	}
 
 	kind := "file"
@@ -671,17 +779,18 @@ func cmdEncrypt(args []string) {
 	}
 	fmt.Fprint(os.Stderr, "    Deriving key… ")
 
+	onKeyReady := func() { fmt.Fprintln(os.Stderr, "done.") }
+
 	if isDir {
-		err = encryptDirectory(src, dst, pw, algo, *shred, *armor)
+		err = encryptDirectory(src, dst, pw, algo, *shred, *armor, onKeyReady)
 	} else {
-		err = encryptFile(src, dst, pw, algo, *shred, *armor)
+		err = encryptFile(src, dst, pw, algo, *shred, *armor, onKeyReady)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n❌  Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Fprintln(os.Stderr, "done.")
 	if dst != "-" {
 		fmt.Printf("✅  Saved to: %s\n", dst)
 	}
@@ -726,18 +835,22 @@ func cmdDecrypt(args []string) {
 			fmt.Fprintf(os.Stderr, "❌  %v\n", err)
 			os.Exit(1)
 		}
+	} else if err = validatePassword(pw); err != nil {
+		fmt.Fprintf(os.Stderr, "❌  %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "🔓  Decrypting: %s\n", src)
 	fmt.Fprintf(os.Stderr, "    Output    : %s\n", dst)
 	fmt.Fprint(os.Stderr, "    Deriving key… ")
 
-	if err = decryptFile(src, dst, pw, *armor); err != nil {
+	onKeyReady := func() { fmt.Fprintln(os.Stderr, "done.") }
+
+	if err = decryptFile(src, dst, pw, *armor, onKeyReady); err != nil {
 		fmt.Fprintf(os.Stderr, "\n❌  %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Fprintln(os.Stderr, "done.")
 	if dst != "-" {
 		fmt.Printf("✅  Saved to: %s\n", dst)
 	}
@@ -768,6 +881,9 @@ func cmdVerify(args []string) {
 			fmt.Fprintf(os.Stderr, "❌  %v\n", err)
 			os.Exit(1)
 		}
+	} else if err = validatePassword(pw); err != nil {
+		fmt.Fprintf(os.Stderr, "❌  %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "🔍  Verifying: %s\n", src)
@@ -791,22 +907,30 @@ func cmdVerify(args []string) {
 	}
 	combined := io.MultiReader(bytes.NewReader(peek), raw)
 
+	pr, hasProgress := newProgressReader(f, src)
+	if hasProgress {
+		combined = io.MultiReader(bytes.NewReader(peek), pr)
+	}
+
 	switch string(peek) {
 	case string(magicV2):
 		fmt.Fprint(os.Stderr, "    Deriving key… ")
-		m, err := parseV2Header(combined, pw)
+		m, err := parseV2Header(combined, pw, func() { fmt.Fprintln(os.Stderr, "done.") })
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n❌  %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, "done.")
 		fmt.Fprintf(os.Stderr, "    Algorithm : %s\n", algoName(m.algo))
 		fmt.Fprint(os.Stderr, "    Integrity… ")
 		if err = decryptChunks(combined, io.Discard, m); err != nil {
 			fmt.Fprintf(os.Stderr, "\n❌  %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, "ok.")
+		if hasProgress {
+			fmt.Fprintln(os.Stderr)
+		} else {
+			fmt.Fprintln(os.Stderr, "ok.")
+		}
 
 	case string(magicV1):
 		fmt.Fprint(os.Stderr, "    Deriving key and verifying… ")
