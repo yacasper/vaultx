@@ -28,6 +28,19 @@
 
 ## Install
 
+### Homebrew (macOS / Linux — recommended)
+
+```bash
+brew tap yacasper/tap
+brew install vaultx
+```
+
+Update to the latest version:
+
+```bash
+brew upgrade vaultx
+```
+
 ### Download binary (no Go required)
 
 Grab the latest pre-built binary for your platform from the [Releases](https://github.com/yacasper/vaultx/releases) page:
