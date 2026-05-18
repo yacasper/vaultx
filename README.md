@@ -2,12 +2,15 @@
 
 > Cross-platform file encryption utility — AES-256-GCM / ChaCha20-Poly1305 + Argon2id
 
+[![CI](https://github.com/yacasper/vaultx/actions/workflows/ci.yml/badge.svg)](https://github.com/yacasper/vaultx/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/yacasper/vaultx)](https://github.com/yacasper/vaultx/releases)
+[![Homebrew](https://img.shields.io/badge/brew-yacasper%2Ftap-orange?logo=homebrew)](https://github.com/yacasper/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Go 1.22+](https://img.shields.io/badge/go-1.22+-blue.svg)](https://go.dev)
+[![Go 1.22+](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
 ---
 
-## Features
+## ✨ Features
 
 | Feature | Details |
 |---|---|
@@ -26,7 +29,7 @@
 
 ---
 
-## Install
+## 📦 Install
 
 ### Homebrew (macOS / Linux — recommended)
 
@@ -78,7 +81,7 @@ sudo mv vaultx /usr/local/bin/
 
 ---
 
-## Usage
+## 🚀 Usage
 
 ### Encrypt
 
@@ -155,7 +158,7 @@ vaultx info secret.pdf.vx
 
 ---
 
-## File Format
+## 📐 File Format
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -175,7 +178,7 @@ vaultx info secret.pdf.vx
 
 ---
 
-## Security Design
+## 🔒 Security Design
 
 ### Key Derivation — Argon2id
 
@@ -201,7 +204,7 @@ The `--shred` flag overwrites the original file 3 times with random bytes before
 
 ---
 
-## GUI
+## 🖥️ GUI
 
 A desktop app is included in the [`gui/`](gui/) directory, built with [Fyne](https://fyne.io).
 
@@ -232,7 +235,7 @@ cp -r vaultx.app /Applications/
 
 ---
 
-## Raycast Integration
+## 🔦 Raycast Integration
 
 Script Commands for [Raycast](https://www.raycast.com) are included in the [`raycast/`](raycast/) directory.
 
@@ -256,7 +259,7 @@ File commands open a native macOS file picker (via AppleScript) after you enter 
 
 ---
 
-## Versioning & Updates
+## 🏷️ Versioning & Updates
 
 ```bash
 vaultx version
@@ -279,7 +282,7 @@ GitHub Actions and Gitea Actions will automatically build binaries for all platf
 
 ---
 
-## Why not GPG / 7-Zip / openssl?
+## 🤔 Why not GPG / 7-Zip / openssl?
 
 | Tool | Problem |
 |---|---|
@@ -290,7 +293,7 @@ GitHub Actions and Gitea Actions will automatically build binaries for all platf
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
 1. Fork this repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
@@ -300,6 +303,6 @@ GitHub Actions and Gitea Actions will automatically build binaries for all platf
 
 ---
 
-## License
+## 📄 License
 
 [MIT](LICENSE) — free to use, modify, and distribute.
