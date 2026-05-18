@@ -1,0 +1,37 @@
+name: Update Homebrew Formula
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute SHA256
+        id: sha
+        run: |
+          SHA=$(curl -sL "https://github.com/yacasper/vaultx/archive/refs/tags/${{ github.ref_name }}.tar.gz" | sha256sum | cut -d' ' -f1)
+          echo "sha256=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: yacasper/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          VERSION="${{ github.ref_name }}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+          sed -i "s|url \".*\"|url \"https://github.com/yacasper/vaultx/archive/refs/tags/${VERSION}.tar.gz\"|" Formula/vaultx.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA}\"|" Formula/vaultx.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name yacasper
+          git config user.email kalashnikov.by@gmail.com
+          git add Formula/vaultx.rb
+          git diff --staged --quiet || git commit -m "Update vaultx formula to ${{ github.ref_name }}"
+          git push
